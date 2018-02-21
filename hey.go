@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rakyll/hey/requester"
+	"github.com/chinuy/hey/requester"
 )
 
 const (
@@ -55,6 +55,7 @@ var (
 	q = flag.Float64("q", 0, "")
 	t = flag.Int("t", 20, "")
 	z = flag.Duration("z", 0, "")
+	r = flag.Int("r", 10, "")
 
 	h2   = flag.Bool("h2", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
@@ -75,6 +76,7 @@ Options:
   -z  Duration of application to send requests. When duration is reached,
       application stops and exits. If duration is specified, n is ignored.
       Examples: -z 10s -z 3m.
+  -r  Request rate per second. Default is 10 req/sec.
   -o  Output type. If none provided, a summary is printed.
       "csv" is the only supported alternative. Dumps the response
       metrics in comma-separated values format.
@@ -119,6 +121,7 @@ func main() {
 	conc := *c
 	q := *q
 	dur := *z
+	rate := *r
 
 	if dur > 0 {
 		num = math.MaxInt32
@@ -216,7 +219,10 @@ func main() {
 	header.Set("User-Agent", ua)
 	req.Header = header
 
+	uid := "1" // FIXME
 	w := &requester.Work{
+		User:				uid,
+		Rate:               float64(rate),
 		Request:            req,
 		RequestBody:        bodyAll,
 		N:                  num,

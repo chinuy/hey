@@ -26,10 +26,14 @@ import (
 	"os"
 	"sync"
 	"time"
+	"math/rand"
+	"strconv"
 
 	"golang.org/x/net/http2"
+	"github.com/leesper/go_rng"
 )
 
+const seed = 0
 // Max size of the buffer of result channel.
 const maxResult = 1000000
 const maxIdleConn = 500
@@ -47,6 +51,11 @@ type result struct {
 }
 
 type Work struct {
+	User string
+
+	// Rate the request per sec
+	Rate float64
+
 	// Request is the request to be made.
 	Request *http.Request
 
@@ -138,6 +147,9 @@ func (b *Work) makeRequest(c *http.Client) {
 	var dnsStart, connStart, resStart, reqStart, delayStart time.Time
 	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
 	req := cloneRequest(b.Request, b.RequestBody)
+	//FIXME hack
+	req.URL.Path = req.URL.Path[:12] + strconv.Itoa(10+rand.Intn(10))
+	req.URL.RawQuery = "uid=u" + b.User
 	trace := &httptrace.ClientTrace{
 		DNSStart: func(info httptrace.DNSStartInfo) {
 			dnsStart = time.Now()
@@ -188,28 +200,47 @@ func (b *Work) makeRequest(c *http.Client) {
 }
 
 func (b *Work) runWorker(client *http.Client, n int) {
-	var throttle <-chan time.Time
-	if b.QPS > 0 {
-		throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
-	}
-
 	if b.DisableRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
 	}
+
+	// var throttle <-chan time.Time
+	// if b.QPS > 0 {
+	// 	throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
+	// }
+
+	// for i := 0; i < n; i++ {
+	// 	// Check if application is stopped. Do not send into a closed channel.
+	// 	select {
+	// 	case <-b.stopCh:
+	// 		return
+	// 	default:
+	// 		if b.QPS > 0 {
+	// 			<-throttle
+	// 		}
+	// 		b.makeRequest(client)
+	// 	}
+	// }
+
+	// The request interval follows exponential distribution,
+	// which would be a Poisson distribution
+	var wg sync.WaitGroup
+	wg.Add(n)
+	erng := rng.NewExpGenerator(seed)
 	for i := 0; i < n; i++ {
-		// Check if application is stopped. Do not send into a closed channel.
 		select {
+		case <-time.After(time.Duration(erng.Exp(b.Rate)) * time.Second):
+			go func() {
+				b.makeRequest(client)
+				wg.Done()
+			}()
 		case <-b.stopCh:
 			return
-		default:
-			if b.QPS > 0 {
-				<-throttle
-			}
-			b.makeRequest(client)
 		}
 	}
+	wg.Wait()
 }
 
 func (b *Work) runWorkers() {
