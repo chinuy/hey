@@ -34,6 +34,9 @@ import (
 )
 
 const seed = 0
+var rgen = rand.New(rand.NewSource(seed))
+
+const baseUrl = "/api/service"
 // Max size of the buffer of result channel.
 const maxResult = 1000000
 const maxIdleConn = 500
@@ -51,10 +54,9 @@ type result struct {
 }
 
 type Work struct {
-	User string
-
 	// Rate the request per sec
 	Rate float64
+	ServiceNum int
 
 	// Request is the request to be made.
 	Request *http.Request
@@ -116,7 +118,7 @@ func (b *Work) Run() {
 	b.results = make(chan *result, min(b.C*1000, maxResult))
 	b.stopCh = make(chan struct{}, b.C)
 	b.start = time.Now()
-	b.report = newReport(b.writer(), b.results, b.Output, b.N)
+	b.report = newReport(b.writer(), b.results, b.Output, b.N * b.C)
 	// Run the reporter first, it polls the result channel until it is closed.
 	go func() {
 		runReporter(b.report)
@@ -140,7 +142,7 @@ func (b *Work) Finish() {
 	b.report.finalize(total)
 }
 
-func (b *Work) makeRequest(c *http.Client) {
+func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	s := time.Now()
 	var size int64
 	var code int
@@ -148,8 +150,8 @@ func (b *Work) makeRequest(c *http.Client) {
 	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
 	req := cloneRequest(b.Request, b.RequestBody)
 	//FIXME hack
-	req.URL.Path = req.URL.Path[:12] + strconv.Itoa(10+rand.Intn(10))
-	req.URL.RawQuery = "uid=u" + b.User
+	req.URL.Path = baseUrl + strconv.FormatUint(sname, 10)//strconv.Itoa(10+rand.Intn(12))
+	req.URL.RawQuery = "uid=u" + uid
 	trace := &httptrace.ClientTrace{
 		DNSStart: func(info httptrace.DNSStartInfo) {
 			dnsStart = time.Now()
@@ -199,7 +201,7 @@ func (b *Work) makeRequest(c *http.Client) {
 	}
 }
 
-func (b *Work) runWorker(client *http.Client, n int) {
+func (b *Work) runWorker(client *http.Client, n int, uid string) {
 	if b.DisableRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -229,11 +231,14 @@ func (b *Work) runWorker(client *http.Client, n int) {
 	var wg sync.WaitGroup
 	wg.Add(n)
 	erng := rng.NewExpGenerator(seed)
+	// FIXME this doesn't accept alpha < 1.0
+	zipf := rand.NewZipf(rgen, 1.001, 1.0, uint64(b.ServiceNum))
+
 	for i := 0; i < n; i++ {
 		select {
 		case <-time.After(time.Duration(erng.Exp(b.Rate)) * time.Second):
 			go func() {
-				b.makeRequest(client)
+				b.makeRequest(client, uid, zipf.Uint64())
 				wg.Done()
 			}()
 		case <-b.stopCh:
@@ -264,12 +269,11 @@ func (b *Work) runWorkers() {
 	}
 	client := &http.Client{Transport: tr, Timeout: time.Duration(b.Timeout) * time.Second}
 
-	// Ignore the case where b.N % b.C != 0.
 	for i := 0; i < b.C; i++ {
-		go func() {
-			b.runWorker(client, b.N/b.C)
+		go func(i int) {
+			b.runWorker(client, b.N, strconv.Itoa(i))
 			wg.Done()
-		}()
+		}(i)
 	}
 	wg.Wait()
 }

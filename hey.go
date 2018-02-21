@@ -219,10 +219,9 @@ func main() {
 	header.Set("User-Agent", ua)
 	req.Header = header
 
-	uid := "1" // FIXME
 	w := &requester.Work{
-		User:				uid,
 		Rate:               float64(rate),
+		ServiceNum:         12,
 		Request:            req,
 		RequestBody:        bodyAll,
 		N:                  num,
