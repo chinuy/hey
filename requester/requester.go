@@ -16,7 +16,6 @@
 package requester
 
 import (
-	"fmt"
 	"bytes"
 	"crypto/tls"
 	"io"
@@ -31,10 +30,13 @@ import (
 	"strconv"
 
 	"golang.org/x/net/http2"
-	"github.com/leesper/go_rng"
 )
 
 const seed = 0
+
+func init() {
+	rand.Seed(seed)
+}
 var rgen = rand.New(rand.NewSource(seed))
 
 const baseUrl = "/api/service"
@@ -59,7 +61,15 @@ type Config struct {
 	Path string
 	User int
 	Service int
-	Rate []int
+	Rate [][]string
+}
+
+type conf struct {
+	num int
+	snum uint64
+	uid string
+	rate float64
+	dist string
 }
 
 type Work struct {
@@ -159,7 +169,7 @@ func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
 	//FIXME hack
 	req := cloneRequest(b.Request[rand.Intn(len(b.Config.Host))], b.RequestBody)
-	req.URL.Path = b.Config.Path + strconv.FormatUint(sname, b.Config.Service)//strconv.Itoa(10+rand.Intn(12))
+	req.URL.Path = b.Config.Path + strconv.FormatUint(sname, 10)
 	req.URL.RawQuery = "uid=u" + uid
 
 	trace := &httptrace.ClientTrace{
@@ -211,7 +221,7 @@ func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	}
 }
 
-func (b *Work) runWorker(client *http.Client, n int, uid string, rate float64, num int) {
+func (b *Work) runWorker(client *http.Client, c conf) {
 	if b.DisableRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -239,16 +249,18 @@ func (b *Work) runWorker(client *http.Client, n int, uid string, rate float64, n
 	// The request interval follows exponential distribution,
 	// which would be a Poisson distribution
 	var wg sync.WaitGroup
-	wg.Add(n)
-	erng := rng.NewExpGenerator(seed)
-	// FIXME this doesn't accept alpha < 1.0
-	zipf := rand.NewZipf(rgen, 1.001, 1.0, uint64(num))
+	wg.Add(c.num)
 
-	for i := 0; i < n; i++ {
+	// FIXME this doesn't accept alpha < 1.0
+	zipf := rand.NewZipf(rgen, 1.001, 1.0, c.snum)
+	t := &IntervalTimer{method: c.dist, rate: c.rate}
+
+	for i := 0; i < c.num; i++ {
 		select {
-		case <-time.After(time.Duration(erng.Exp(rate)) * time.Second):
+		// case <-time.After(time.Duration(rndWaitGen.Exp(c.rate)) * time.Second):
+		case <-t.nextTick():
 			go func() {
-				b.makeRequest(client, uid, zipf.Uint64())
+				b.makeRequest(client, c.uid, zipf.Uint64())
 				wg.Done()
 			}()
 		case <-b.stopCh:
@@ -256,6 +268,28 @@ func (b *Work) runWorker(client *http.Client, n int, uid string, rate float64, n
 		}
 	}
 	wg.Wait()
+}
+
+
+type IntervalTimer struct {
+	method string
+	rate float64
+}
+
+func (t *IntervalTimer) nextTick() <-chan time.Time {
+	var d float64
+	switch t.method {
+	case "fixed":
+		d = 1e6/t.rate
+	case "uniform":
+		d = 2e6 / t.rate * rand.Float64()
+	case "poisson":
+		d = 1e6 / t.rate * rand.ExpFloat64()
+	default:
+		panic("unknown method: " + t.method)
+	}
+	delay := time.Duration(d)* time.Microsecond
+	return time.After(delay)
 }
 
 func (b *Work) runWorkers() {
@@ -279,22 +313,18 @@ func (b *Work) runWorkers() {
 	}
 	client := &http.Client{Transport: tr, Timeout: time.Duration(b.Timeout) * time.Second}
 
-	rate := make([]float64, b.C)
-	for i := range rate{
-	//	rate[i] = float64(rand.Intn(int(b.Rate)))
-		rate[i] = float64(b.Config.Rate[i])
+	confs := make([]conf, b.C)
+	for i := range confs {
+		confs[i].uid = strconv.Itoa(i)
+		confs[i].rate, _ = strconv.ParseFloat(b.Config.Rate[i][0], 64)
+		confs[i].dist = b.Config.Rate[i][1]
+		confs[i].snum = uint64(b.Config.Service)
+		confs[i].num = b.N
 	}
-
-	num := make([]int, b.C)
-	for i := range rate{
-		//num[i] = rand.Intn(b.ServiceNum)
-		num[i] = b.ServiceNum
-	}
-	fmt.Println("Rate:", rate)
 
 	for i := 0; i < b.C; i++ {
 		go func(i int) {
-			b.runWorker(client, b.N, strconv.Itoa(i), rate[i], num[i])
+			b.runWorker(client, confs[i])
 			wg.Done()
 		}(i)
 	}
