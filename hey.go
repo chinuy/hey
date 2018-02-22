@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/chinuy/hey/requester"
+	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -72,7 +73,6 @@ Options:
   -n  Number of requests to run. Default is 200.
   -c  Number of requests to run concurrently. Total number of requests cannot
       be smaller than the concurrency level. Default is 50.
-  -q  Rate limit, in queries per second (QPS). Default is no rate limit.
   -z  Duration of application to send requests. When duration is reached,
       application stops and exits. If duration is specified, n is ignored.
       Examples: -z 10s -z 3m.
@@ -102,7 +102,6 @@ Options:
   -cpus                 Number of used cpu cores.
                         (default for current machine is %d cores)
 `
-
 func main() {
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, fmt.Sprintf(usage, runtime.NumCPU()))
@@ -116,12 +115,17 @@ func main() {
 		usageAndExit("")
 	}
 
+	configFn := flag.Args()[0]
+	conf := requester.Config{}
+
+	dat, _ := ioutil.ReadFile(configFn)
+	yaml.Unmarshal([]byte(dat), &conf)
+
 	runtime.GOMAXPROCS(*cpus)
 	num := *n
 	conc := *c
 	q := *q
 	dur := *z
-	rate := *r
 
 	if dur > 0 {
 		num = math.MaxInt32
@@ -138,7 +142,6 @@ func main() {
 		}
 	}
 
-	url := flag.Args()[0]
 	method := strings.ToUpper(*m)
 
 	// set content-type
@@ -196,33 +199,38 @@ func main() {
 		}
 	}
 
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		usageAndExit(err.Error())
-	}
-	req.ContentLength = int64(len(bodyAll))
-	if username != "" || password != "" {
-		req.SetBasicAuth(username, password)
-	}
+	reqs := make([]*http.Request, len(conf.Host))
+	for i, h := range conf.Host {
+		url := "http://" + h + conf.Path
+		req, err := http.NewRequest(method, url, nil)
+		if err != nil {
+			usageAndExit(err.Error())
+		}
+		req.ContentLength = int64(len(bodyAll))
+		if username != "" || password != "" {
+			req.SetBasicAuth(username, password)
+		}
 
-	// set host header if set
-	if *hostHeader != "" {
-		req.Host = *hostHeader
-	}
+		// set host header if set
+		if *hostHeader != "" {
+			req.Host = *hostHeader
+		}
 
-	ua := req.UserAgent()
-	if ua == "" {
-		ua = heyUA
-	} else {
-		ua += " " + heyUA
+		ua := req.UserAgent()
+		if ua == "" {
+			ua = heyUA
+		} else {
+			ua += " " + heyUA
+		}
+		header.Set("User-Agent", ua)
+		req.Header = header
+		reqs[i] = req
 	}
-	header.Set("User-Agent", ua)
-	req.Header = header
 
 	w := &requester.Work{
-		Rate:               float64(rate),
+		Config:             conf,
 		ServiceNum:         12,
-		Request:            req,
+		Request:            reqs,
 		RequestBody:        bodyAll,
 		N:                  num,
 		C:                  conc,

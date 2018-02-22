@@ -16,6 +16,7 @@
 package requester
 
 import (
+	"fmt"
 	"bytes"
 	"crypto/tls"
 	"io"
@@ -53,13 +54,21 @@ type result struct {
 	contentLength int64
 }
 
+type Config struct {
+	Host []string
+	Path string
+	User int
+	Service int
+	Rate []int
+}
+
 type Work struct {
+	Config Config
 	// Rate the request per sec
-	Rate float64
 	ServiceNum int
 
 	// Request is the request to be made.
-	Request *http.Request
+	Request []*http.Request
 
 	RequestBody []byte
 
@@ -148,10 +157,11 @@ func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	var code int
 	var dnsStart, connStart, resStart, reqStart, delayStart time.Time
 	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
-	req := cloneRequest(b.Request, b.RequestBody)
 	//FIXME hack
-	req.URL.Path = baseUrl + strconv.FormatUint(sname, 10)//strconv.Itoa(10+rand.Intn(12))
+	req := cloneRequest(b.Request[rand.Intn(len(b.Config.Host))], b.RequestBody)
+	req.URL.Path = b.Config.Path + strconv.FormatUint(sname, b.Config.Service)//strconv.Itoa(10+rand.Intn(12))
 	req.URL.RawQuery = "uid=u" + uid
+
 	trace := &httptrace.ClientTrace{
 		DNSStart: func(info httptrace.DNSStartInfo) {
 			dnsStart = time.Now()
@@ -201,7 +211,7 @@ func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	}
 }
 
-func (b *Work) runWorker(client *http.Client, n int, uid string) {
+func (b *Work) runWorker(client *http.Client, n int, uid string, rate float64, num int) {
 	if b.DisableRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -232,11 +242,11 @@ func (b *Work) runWorker(client *http.Client, n int, uid string) {
 	wg.Add(n)
 	erng := rng.NewExpGenerator(seed)
 	// FIXME this doesn't accept alpha < 1.0
-	zipf := rand.NewZipf(rgen, 1.001, 1.0, uint64(b.ServiceNum))
+	zipf := rand.NewZipf(rgen, 1.001, 1.0, uint64(num))
 
 	for i := 0; i < n; i++ {
 		select {
-		case <-time.After(time.Duration(erng.Exp(b.Rate)) * time.Second):
+		case <-time.After(time.Duration(erng.Exp(rate)) * time.Second):
 			go func() {
 				b.makeRequest(client, uid, zipf.Uint64())
 				wg.Done()
@@ -255,7 +265,7 @@ func (b *Work) runWorkers() {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
-			ServerName:         b.Request.Host,
+			//ServerName:         b.Request.Host,
 		},
 		MaxIdleConnsPerHost: min(b.C, maxIdleConn),
 		DisableCompression:  b.DisableCompression,
@@ -269,9 +279,22 @@ func (b *Work) runWorkers() {
 	}
 	client := &http.Client{Transport: tr, Timeout: time.Duration(b.Timeout) * time.Second}
 
+	rate := make([]float64, b.C)
+	for i := range rate{
+	//	rate[i] = float64(rand.Intn(int(b.Rate)))
+		rate[i] = float64(b.Config.Rate[i])
+	}
+
+	num := make([]int, b.C)
+	for i := range rate{
+		//num[i] = rand.Intn(b.ServiceNum)
+		num[i] = b.ServiceNum
+	}
+	fmt.Println("Rate:", rate)
+
 	for i := 0; i < b.C; i++ {
 		go func(i int) {
-			b.runWorker(client, b.N, strconv.Itoa(i))
+			b.runWorker(client, b.N, strconv.Itoa(i), rate[i], num[i])
 			wg.Done()
 		}(i)
 	}
