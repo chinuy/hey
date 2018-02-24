@@ -16,6 +16,7 @@
 package main
 
 import (
+	"net"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -51,12 +52,10 @@ var (
 
 	output = flag.String("o", "", "")
 
-	c = flag.Int("c", 50, "")
 	n = flag.Int("n", 200, "")
 	q = flag.Float64("q", 0, "")
 	t = flag.Int("t", 20, "")
 	z = flag.Duration("z", 0, "")
-	r = flag.Int("r", 10, "")
 
 	h2   = flag.Bool("h2", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
@@ -122,23 +121,11 @@ func main() {
 
 	runtime.GOMAXPROCS(*cpus)
 	num := *n
-	conc := *c
 	q := *q
 	dur := *z
 
 	if dur > 0 {
 		num = math.MaxInt32
-		if conc <= 0 {
-			usageAndExit("-c cannot be smaller than 1.")
-		}
-	} else {
-		if num <= 0 || conc <= 0 {
-			usageAndExit("-n and -c cannot be smaller than 1.")
-		}
-
-		if num < conc {
-			usageAndExit("-n cannot be less than -c.")
-		}
 	}
 
 	method := strings.ToUpper(*m)
@@ -232,7 +219,7 @@ func main() {
 		Request:            reqs,
 		RequestBody:        bodyAll,
 		N:                  num,
-		C:                  conc,
+		C:                  conf.User,
 		QPS:                q,
 		Timeout:            *t,
 		DisableCompression: *disableCompression,
@@ -256,6 +243,28 @@ func main() {
 		}()
 	}
 	w.Run()
+
+	dialLifecycle(conf.Host, "metric||")
+	dialLifecycle(conf.Host, "reset||")
+}
+
+func dialLifecycle(hosts []string, op string) {
+	for _, addr := range hosts {
+		c, err := net.DialTimeout("tcp", addr[:strings.Index(addr, ":")] + ":8888", time.Second)
+		if err != nil {
+			fmt.Println("dial server err", err)
+		}
+		defer c.Close()
+
+		c.Write([]byte(op))
+		buf := make([]byte, 1024)
+		for {
+			n, _ := c.Read(buf[:])
+			res := string(buf[0:n])
+			fmt.Printf("%s, %s\n", addr, res)
+			break
+		}
+	}
 }
 
 func errAndExit(msg string) {

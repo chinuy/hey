@@ -1,0 +1,20 @@
+# assign 0 to use time.Now() as seed number
+randseed: 0
+host:
+    - 192.168.33.113:8080
+    # - 192.168.33.114:8080
+    # - 192.168.33.115:8080
+path: /api/service
+user: 5
+service: 25
+rate:
+    - [10, fixed]
+    - [30, poisson]
+    - [30, uniform]
+    - [20, poisson]
+    - [10, poisson]
+    - [5 , poisson]
+    - [1 , uniform]
+    - [4 , poisson]
+    - [1 , poisson]
+    - [10, poisson]

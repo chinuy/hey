@@ -32,14 +32,11 @@ import (
 	"golang.org/x/net/http2"
 )
 
-const seed = 0
-
 func init() {
-	rand.Seed(seed)
+	rand.Seed(time.Now().UnixNano())
 }
-var rgen = rand.New(rand.NewSource(seed))
+var rgen = rand.New(rand.NewSource(time.Now().UnixNano()))
 
-const baseUrl = "/api/service"
 // Max size of the buffer of result channel.
 const maxResult = 1000000
 const maxIdleConn = 500
@@ -57,6 +54,7 @@ type result struct {
 }
 
 type Config struct {
+	RandSeed int64
 	Host []string
 	Path string
 	User int
@@ -134,7 +132,12 @@ func (b *Work) writer() io.Writer {
 // Run makes all the requests, prints the summary. It blocks until
 // all work is done.
 func (b *Work) Run() {
-	b.results = make(chan *result, min(b.C*1000, maxResult))
+	if b.Config.RandSeed != 0 {
+		rand.Seed(b.Config.RandSeed)
+		rgen = rand.New(rand.NewSource(b.Config.RandSeed))
+	}
+
+	b.results = make(chan *result, min(b.C*b.N, maxResult))
 	b.stopCh = make(chan struct{}, b.C)
 	b.start = time.Now()
 	b.report = newReport(b.writer(), b.results, b.Output, b.N * b.C)
@@ -167,6 +170,7 @@ func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	var code int
 	var dnsStart, connStart, resStart, reqStart, delayStart time.Time
 	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
+
 	//FIXME hack
 	req := cloneRequest(b.Request[rand.Intn(len(b.Config.Host))], b.RequestBody)
 	req.URL.Path = b.Config.Path + strconv.FormatUint(sname, 10)
@@ -249,22 +253,26 @@ func (b *Work) runWorker(client *http.Client, c conf) {
 	// The request interval follows exponential distribution,
 	// which would be a Poisson distribution
 	var wg sync.WaitGroup
-	wg.Add(c.num)
+	//wg.Add(c.num)
 
 	// FIXME this doesn't accept alpha < 1.0
 	zipf := rand.NewZipf(rgen, 1.001, 1.0, c.snum)
 	t := &IntervalTimer{method: c.dist, rate: c.rate}
 
+	done := false
 	for i := 0; i < c.num; i++ {
+		if done == true {
+			break
+		}
 		select {
-		// case <-time.After(time.Duration(rndWaitGen.Exp(c.rate)) * time.Second):
 		case <-t.nextTick():
+			wg.Add(1)
 			go func() {
 				b.makeRequest(client, c.uid, zipf.Uint64())
 				wg.Done()
 			}()
 		case <-b.stopCh:
-			return
+			done = true
 		}
 	}
 	wg.Wait()
@@ -316,10 +324,12 @@ func (b *Work) runWorkers() {
 	confs := make([]conf, b.C)
 	for i := range confs {
 		confs[i].uid = strconv.Itoa(i)
-		confs[i].rate, _ = strconv.ParseFloat(b.Config.Rate[i][0], 64)
-		confs[i].dist = b.Config.Rate[i][1]
 		confs[i].snum = uint64(b.Config.Service)
 		confs[i].num = b.N
+
+		n := min(i, len(b.Config.Rate)-1)
+		confs[i].rate, _ = strconv.ParseFloat(b.Config.Rate[n][0], 64)
+		confs[i].dist = b.Config.Rate[n][1]
 	}
 
 	for i := 0; i < b.C; i++ {
