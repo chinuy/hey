@@ -58,13 +58,14 @@ type Config struct {
 	Host []string
 	Path string
 	User int
-	Service int
+	Service [][]string
 	Rate [][]string
 }
 
 type conf struct {
 	num int
-	snum uint64
+	sNum uint64
+	sDist string
 	uid string
 	rate float64
 	dist string
@@ -72,8 +73,6 @@ type conf struct {
 
 type Work struct {
 	Config Config
-	// Rate the request per sec
-	ServiceNum int
 
 	// Request is the request to be made.
 	Request []*http.Request
@@ -172,7 +171,10 @@ func (b *Work) makeRequest(c *http.Client, uid string, sname uint64) {
 	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
 
 	//FIXME hack
+
+	// random select a host
 	req := cloneRequest(b.Request[rand.Intn(len(b.Config.Host))], b.RequestBody)
+
 	req.URL.Path = b.Config.Path + strconv.FormatUint(sname, 10)
 	req.URL.RawQuery = "uid=u" + uid
 
@@ -253,10 +255,10 @@ func (b *Work) runWorker(client *http.Client, c conf) {
 	// The request interval follows exponential distribution,
 	// which would be a Poisson distribution
 	var wg sync.WaitGroup
-	//wg.Add(c.num)
 
 	// FIXME this doesn't accept alpha < 1.0
-	zipf := rand.NewZipf(rgen, 1.001, 1.0, c.snum)
+	zipf := rand.NewZipf(rgen, 1.001, 1.0, c.sNum)
+
 	t := &IntervalTimer{method: c.dist, rate: c.rate}
 
 	done := false
@@ -268,7 +270,7 @@ func (b *Work) runWorker(client *http.Client, c conf) {
 		case <-t.nextTick():
 			wg.Add(1)
 			go func() {
-				b.makeRequest(client, c.uid, zipf.Uint64())
+				b.makeRequest(client, c.uid, gen(c.sDist, zipf, c.sNum))
 				wg.Done()
 			}()
 		case <-b.stopCh:
@@ -278,6 +280,16 @@ func (b *Work) runWorker(client *http.Client, c conf) {
 	wg.Wait()
 }
 
+func gen(method string, zipfGen *rand.Zipf, num uint64) uint64 {
+	switch method {
+	case "uniform":
+		return uint64(rand.Int63n(int64(num)))
+	case "zipf":
+		return zipfGen.Uint64()
+	default:
+		panic("unknown method: " + method)
+	}
+}
 
 type IntervalTimer struct {
 	method string
@@ -322,12 +334,16 @@ func (b *Work) runWorkers() {
 	client := &http.Client{Transport: tr, Timeout: time.Duration(b.Timeout) * time.Second}
 
 	confs := make([]conf, b.C)
+	var n int
 	for i := range confs {
 		confs[i].uid = strconv.Itoa(i)
-		confs[i].snum = uint64(b.Config.Service)
+
+		n = min(i, len(b.Config.Service)-1)
+		confs[i].sNum, _  = strconv.ParseUint(b.Config.Service[n][0], 10, 64)
+		confs[i].sDist = b.Config.Service[n][1]
 		confs[i].num = b.N
 
-		n := min(i, len(b.Config.Rate)-1)
+		n = min(i, len(b.Config.Rate)-1)
 		confs[i].rate, _ = strconv.ParseFloat(b.Config.Rate[n][0], 64)
 		confs[i].dist = b.Config.Rate[n][1]
 	}

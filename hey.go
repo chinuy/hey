@@ -215,7 +215,6 @@ func main() {
 
 	w := &requester.Work{
 		Config:             conf,
-		ServiceNum:         12,
 		Request:            reqs,
 		RequestBody:        bodyAll,
 		N:                  num,
@@ -253,6 +252,7 @@ func dialLifecycle(hosts []string, op string) {
 		c, err := net.DialTimeout("tcp", addr[:strings.Index(addr, ":")] + ":8888", time.Second)
 		if err != nil {
 			fmt.Println("dial server err", err)
+			continue
 		}
 		defer c.Close()
 
