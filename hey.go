@@ -16,7 +16,6 @@
 package main
 
 import (
-	"net"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -243,27 +242,20 @@ func main() {
 	}
 	w.Run()
 
-	dialLifecycle(conf.Host, "metric||")
-	dialLifecycle(conf.Host, "reset||")
+	dialLifecycle(conf.Host, "metric")
+	dialLifecycle(conf.Host, "reset")
 }
 
 func dialLifecycle(hosts []string, op string) {
 	for _, addr := range hosts {
-		c, err := net.DialTimeout("tcp", addr[:strings.Index(addr, ":")] + ":8888", time.Second)
+		resp, err := http.Get("http://" + addr + "/" + op)
 		if err != nil {
-			fmt.Println("dial server err", err)
+			fmt.Printf("Error: %v\n", err)
 			continue
 		}
-		defer c.Close()
-
-		c.Write([]byte(op))
-		buf := make([]byte, 1024)
-		for {
-			n, _ := c.Read(buf[:])
-			res := string(buf[0:n])
-			fmt.Printf("%s, %s\n", addr, res)
-			break
-		}
+		defer resp.Body.Close()
+		body, _ := ioutil.ReadAll(resp.Body)
+		fmt.Printf("%s, %s\n", addr, body)
 	}
 }
 
