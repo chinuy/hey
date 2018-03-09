@@ -30,6 +30,7 @@ import (
 	"strconv"
 
 	"golang.org/x/net/http2"
+	"github.com/chinuy/zipf"
 )
 
 func init() {
@@ -256,8 +257,7 @@ func (b *Work) runWorker(client *http.Client, c conf) {
 	// which would be a Poisson distribution
 	var wg sync.WaitGroup
 
-	// FIXME this doesn't accept alpha < 1.0
-	zipf := rand.NewZipf(rgen, 1.001, 1.0, c.sNum)
+	zipf := zipf.NewZipf(rgen, 1.0, c.sNum)
 
 	t := &IntervalTimer{method: c.dist, rate: c.rate}
 
@@ -280,7 +280,7 @@ func (b *Work) runWorker(client *http.Client, c conf) {
 	wg.Wait()
 }
 
-func gen(method string, zipfGen *rand.Zipf, num uint64) uint64 {
+func gen(method string, zipfGen *zipf.Zipf, num uint64) uint64 {
 	switch method {
 	case "uniform":
 		return uint64(rand.Int63n(int64(num)))
